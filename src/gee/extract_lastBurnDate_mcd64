@@ -1,0 +1,103 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var mcd64 = ee.ImageCollection("MODIS/061/MCD64A1");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+//**************************************************************************************************
+//*** Description    ***
+//**************************************************************************************************
+// Calculates the last decimal date of a burn
+// Author: Sami Rifai
+// Date: 2024-10-29
+
+ 
+//**************************************************************************************************
+//*** Options for monthly aggegation ***
+//**************************************************************************************************
+var state_usa = "Arizona" 
+var start_date=ee.Date("2000-07-01") // CHANGE - check product start date
+var end_date=ee.Date("2024-10-30") // CHANGE - check product end date
+var start_year = start_date.get('year'); 
+var end_year = end_date.get('year');
+var years=ee.List.sequence(start_year,end_year);
+var ic = mcd64; // CHANGE
+var product_name = "mcd64" // CHANGE
+var sel_reducer = ee.Reducer.mean() // CHANGE
+var sel_var_name = "BurnDate" // CHANGE
+var export_scale = 500; // meters
+var export_crs = "EPSG:4326";
+var out_var_names = "lastBurnDate"; // CHANGE
+var fnp = product_name+"_"+out_var_names+"_"+start_date.format("Y-M").getInfo()+
+          "_"+end_date.format("Y-M").getInfo()
+print(fnp)
+
+var roi_poly = ee.FeatureCollection("TIGER/2016/States")
+           .filter(ee.Filter.eq("NAME",state_usa))
+var roi = roi_poly.geometry(100)
+
+
+
+
+//**************************************************************************************************
+//*** Functions   ***
+//**************************************************************************************************
+
+
+
+//**************************************************************************************************
+//*** Main   ***
+//**************************************************************************************************
+
+var ic2 = years.map(function(y){
+  var ss = ic.filter(ee.Filter.calendarRange(y,y,'year'))
+  var burn_ddate = ss.select("BurnDate").max()
+                     .toFloat()
+                     .divide(366)
+                     .add(ee.Number(y).toFloat())
+                     .rename("dd_burnDate")
+  
+  // var burn_ddate = ss.map(function(i){
+  //   var tmp = i.select("BurnDate").divide(366).add(y).rename("dd_burnDate")
+  //   return(tmp)
+  // }
+  var out = burn_ddate.set("system:time_start",ee.Date.fromYMD(y,1,1).millis()); 
+  return(out)
+}).flatten()
+
+ic2 = ee.ImageCollection.fromImages(ic2).map(function(i){
+  var out = i.clip(roi); 
+  return(out)
+ })
+
+var bd_max = ic2.select("dd_burnDate").max().rename("bd"); 
+
+
+
+//**************************************************************************************************
+//*** Visualisation   ***
+//**************************************************************************************************
+var turbo = ["#30123BFF", "#3F3994FF", "#455ED2FF", "#4681F7FF", "#3AA2FCFF", 
+"#23C3E4FF", "#18DEC1FF", "#2CF09EFF", "#5BFB72FF", "#8EFF49FF", 
+"#B5F836FF", "#D6E635FF", "#EFCD3AFF", "#FCB036FF", "#FD8A26FF", 
+"#F36215FF", "#E14209FF", "#C82803FF", "#A51301FF", "#7A0403FF"]
+
+// Map.addLayer(ic2.select("dd_burnDate"),null,"burn_ddate")
+// Map.addLayer(ic)
+Map.addLayer(bd_max,{min:2000, max:2024.9, palette:turbo,bands:['bd']},"burn_ddate",false)
+
+
+//**************************************************************************************************
+//*** Exports   ***
+//**************************************************************************************************
+
+
+
+Export.image.toDrive(
+  // image, description, folder, fileNamePrefix, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, fileDimensions, skipEmptyTiles, fileFormat, formatOptions
+  {image:bd_max,
+  description:fnp,
+  folder:"gee_data_AZ_tree_stress", 
+  fileNamePrefix:fnp,
+  region:roi,
+  crs:export_crs,
+  scale:export_scale,
+  maxPixels:501399299 
+  })

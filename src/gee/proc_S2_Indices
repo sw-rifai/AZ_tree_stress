@@ -1,0 +1,292 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var soil = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Feature(
+        ee.Geometry.Point([150.70764814731683, -33.16400067789715]),
+        {
+          "label": "soil",
+          "system:index": "0"
+        }),
+    rock = 
+    /* color: #ffcf00 */
+    /* shown: false */
+    ee.Feature(
+        ee.Geometry.Point([150.11388758284681, -33.222528398845945]),
+        {
+          "label": "outcrop",
+          "system:index": "0"
+        }),
+    gv = 
+    /* color: #00ff1d */
+    /* shown: false */
+    ee.Feature(
+        ee.Geometry.Point([150.57667056185835, -33.20173488571872]),
+        {
+          "label": "gv",
+          "system:index": "0"
+        }),
+    shade = 
+    /* color: #0007ff */
+    /* shown: false */
+    ee.Feature(
+        ee.Geometry.Point([150.36538932085477, -33.589072930819256]),
+        {
+          "label": "shade",
+          "system:index": "0"
+        }),
+    roi = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.59274913917702, 35.17791792753298],
+          [-111.59274913917702, 35.155745870441784],
+          [-111.56288005958717, 35.155745870441784],
+          [-111.56288005958717, 35.17791792753298]]], null, false),
+    s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// DESCRIPTION =====================
+
+
+// Uses: 
+// https://ee-spectral.readthedocs.io/en/latest/
+
+// OPTIONS  ========================
+var date_start = "2024-06-01"
+var date_end = "2024-10-01"
+
+// Imports
+var mort_coords = ee.FeatureCollection("projects/ee-srifai/assets/AZ/AZ_tree_mort_coords")
+var krig = ee.Image("projects/ee-srifai/assets/AZ/krig_max_mortRangeMax")
+
+var spectral = require("users/dmlmont/spectral:spectral");
+
+
+
+
+// FUNCTIONS ========================================
+function maskS2clouds(image) {
+/**
+ * Function to mask clouds using the Sentinel-2 QA band
+ * @param {ee.Image} image Sentinel-2 image
+ * @return {ee.Image} cloud masked Sentinel-2 image
+ */
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask);
+}
+
+
+function scale_bands(image){
+  var optical = image.select(["B1","B2","B3","B4",'B5','B6',
+                              'B7','B8','B8A','B9','B11','B12'],
+  ["aerosols","blue","green","red","rededge1","rededge2","rededge3","nir","rededge4",
+  "watervapor","swir1","swir2"])
+  .multiply(0.0001)
+  var out = image.addBands(optical);
+  return(out)
+}
+
+
+
+var spec_indices = ["NDVI","GNDVI","SAVI",
+   "SI","NBR","NDWI",
+   "BI","MBI", "NBAI","EVI2","S2REP","NDREI"]
+
+var add_vi = function(i){
+  // Add spectral indices =============
+  var S2 = i;
+  var parameters = {
+    "N": S2.select("nir"),
+    "N2": S2.select("rededge4"),
+    "R": S2.select("red"),
+    "G": S2.select("green"),
+    "B": S2.select("blue"),
+    "S1": S2.select("swir1"),
+    "S2": S2.select("swir2"),
+    "RE1": S2.select("rededge1"),
+    "RE2": S2.select("rededge2"),
+    "RE3": S2.select("rededge3"),
+    "L": 0.5, 
+    "g": 1
+}; 
+
+  var vi = spectral.computeIndex(i,
+   spec_indices,
+   parameters);
+  var out = i.addBands(vi); 
+  return(out)
+}
+
+
+
+// MAIN ================================
+
+
+var az_mask = krig.gte(0);
+
+var ss = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+          // .filter(ee.Filter.bounds(roi))
+          .filterDate(date_start, date_end)
+          // Pre-filter to get less cloudy granules.
+          .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',30))
+          .map(maskS2clouds)
+          .map(scale_bands)
+          .map(add_vi)
+          .map(function(i){
+            var out = i.updateMask(az_mask); 
+            return(out)
+          })
+
+
+
+var sel_bands = ["blue","green","red","rededge1","rededge2","rededge3","nir","rededge4",
+  "swir1","swir2"]
+sel_bands = ee.List(sel_bands).cat(spec_indices)
+print(sel_bands)
+
+
+var im1 = ss.select(sel_bands);
+// var im1 = ss.select(['red','green','blue','S2REP','NDVI','SI']);
+
+// im1 = im1.select(sel_bands)
+// var S2 = im1;
+
+
+var naip = ee.ImageCollection('USDA/NAIP/DOQQ')
+                  .filter(ee.Filter.date('2017-01-01', '2018-12-31'));
+
+
+// function add_vi(image){
+//   var ndvi = image.select(['red','nir']).normalizedDifference(['nir','red']).rename('ndvi')
+//   var mi = image.normalizedDifference(['rededge4','swir1']).rename('mi')
+//   var ndwi = image.normalizedDifference(['green','nir']).rename('ndwi')
+  
+//   var vi_stack = ndvi
+//   var out = image.addBands(vi_stack)
+//   return(out)
+// }
+
+
+
+
+var rainbow = ["#D1BBD7", "#AE76A3", "#882E72", "#1965B0", "#5289C7", "#7BAFDE", 
+"#4EB265", "#CAE0AB", "#F7F056", "#F4A736", "#E8601C", "#DC050C"]
+var turbo = ["#000004FF", "#1B0C42FF", "#4B0C6BFF", "#781C6DFF", "#A52C60FF", 
+"#CF4446FF", "#ED6925FF", "#FB9A06FF", "#F7D03CFF", "#FCFFA4FF"]
+var inferno = ["#000004FF", "#1B0C42FF", "#4B0C6BFF", "#781C6DFF", "#A52C60FF", 
+"#CF4446FF", "#ED6925FF", "#FB9A06FF", "#F7D03CFF", "#FCFFA4FF"]
+
+var rgbVis = {
+  min: 0.005,
+  max: 0.3,
+  gamma: 1,
+  bands: ['red', 'green', 'blue'],
+};
+
+Map.addLayer(im1, rgbVis, 'RGB',true);
+
+
+// Map.addLayer(im1.select("GNDVI"), {palette:turbo}, 'GNDVI', false);
+// Map.addLayer(im1.select("SAVI"), {palette:turbo}, 'SAVI', false);
+// Map.addLayer(im1.select("NBR"), {palette:turbo}, 'NBR', false);
+// Map.addLayer(im1.select("NDWI"), {palette:turbo, min:-1, max:0}, 'NDWI', false);
+// Map.addLayer(im1.select("BI"), {palette:turbo}, 'BI', false);
+// Map.addLayer(im1.select("MBI"), {palette:turbo}, 'MBI', false);
+// Map.addLayer(im1.select("NBAI"), {palette:inferno,min:-1, max:-0.7}, 'NBAI', false);
+// Map.addLayer(im1.select("EVI2"), {palette:inferno,min:0, max:0.5}, 'EVI2', false);
+// Map.setCenter(-107.8983, 33.84962, 18)
+print(im1)
+Map.addLayer(im1.select("S2REP"), {palette:inferno.reverse(),min:708, max:721}, 'S2REP', false);
+
+Map.addLayer(im1.select("SI"), {min:0.9,max:1,palette:turbo}, 'SI', false);
+
+
+
+var viz_min = -1
+var viz_max = 1
+
+// Map.addLayer(sma1.select('soil'),{min:viz_min,max:viz_max,palette:turbo},"soil",false)
+Map.addLayer(im1,{min:viz_min,max:viz_max,palette:turbo,bands:['NDVI']},"NDVI",false)
+
+
+// var out_indices = im1.select(["BI","SAVI","NBR","NDWI","NBAI","EVI2"]); 
+
+// NAIP ----------
+var trueColor = naip.select(['R', 'G', 'B']);
+var trueColorVis = {
+  min: 0,
+  max: 255,
+};
+// Map.setCenter(-73.9958, 40.7278, 15);
+Map.addLayer(trueColor, trueColorVis, 'True Color');
+
+
+// Mortality coordinates ========
+// Map.addLayer(mort_coords, {color:'red'},'mort_coords',false)
+
+// var fnp = 'AZ/AzFlagstaff_S2_indices_v1';
+// Export.image.toAsset(
+//   // image, description, assetId, pyramidingPolicy, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, priority
+//   {
+//     image:out_indices,
+//     assetId: fnp,
+//     description:fnp,
+//     region:roi_bbox,
+//     scale:10, 
+//     maxPixels: 539903400*2
+//   }
+//   )
+
+
+// Declare the spectral signature plot ---------
+// ["blue","green","red",
+//  "rededge1","rededge2","rededge3",
+//  "nir","rededge4",
+//   "swir1","swir2",
+//                       "ndvi"]
+
+// var wavelengths = [497, 560, 664, 
+//                   704, 740, 783,
+//                   835, 865,
+//                   1613, 2202, 
+//                   0];
+
+
+// var spectraChart = ui.Chart.image.regions(
+//   // image, regions, reducer, scale, seriesProperty, xLabels)
+//   {image: im1, // just select the optical bands that have been scaled
+//   regions: fc,
+//   reducer:ee.Reducer.median(),
+//   scale: 10,
+//   seriesProperty: 'label',
+//   xLabels: wavelengths
+// });
+// spectraChart.setChartType('LineChart');
+// spectraChart.setOptions({
+//   title: 'S2 surface reflectance spectra across different landcovers around the Blue Mountains',
+//   fontSize: 30,
+//   hAxis: {
+//     title: 'Wavelength (micrometers)'
+//   },
+//   vAxis: {
+//     title: 'Reflectance'
+//   },
+//   lineWidth: 3,
+//   pointSize: 4,
+// });
+// print(spectraChart); // we have to print the spectraChart object
+

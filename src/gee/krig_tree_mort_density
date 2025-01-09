@@ -1,0 +1,68 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var lsib = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// DESCRIPTION =====================
+
+
+
+// OPTIONS  ========================
+var mort_coords = ee.FeatureCollection("projects/ee-srifai/assets/AZ_tree_mort_coords")
+
+
+// MAIN ============================
+var az = ee.FeatureCollection("TIGER/2016/States")
+           .filter(ee.Filter.eq("NAME","Arizona"))
+
+mort_coords = mort_coords.filter(ee.Filter.bounds(az))
+                         .filter(ee.Filter.eq("damage_type","Mortality"))
+
+Map.addLayer(az)
+
+print(mort_coords.limit(100))
+print(mort_coords.size())
+
+
+// Sample the SST image at 1000 random locations.
+var samples = mort_coords.randomColumn('random', 321,'uniform')
+                         .sort("random")
+                         .limit(30000)
+  // .addBands(ee.Image.pixelLonLat())
+  // .sample({region: az.geometry(), numPixels: 1000})
+  // .map(function(sample) {
+  //   var lat = sample.get('latitude');
+  //   var lon = sample.get('longitude');
+  //   var range_max = sample.get('range_max');
+  //   return ee.Feature(ee.Geometry.Point([lon, lat]), {range_max: range_max});
+  // });
+
+var r = samples.kriging({
+  // propertyName, shape, range, sill, nugget, maxDistance, reducer)
+  // Estimated the params in R "fit_semivariogram_treeMortCoords.R"
+  propertyName: 'range_max',
+  shape: 'spherical',
+  range: 1519,
+  sill: 5.87,
+  nugget: 5.02,
+  maxDistance: 5000,
+  reducer: 'max',
+})
+
+var colors = ['00007F', '0000FF', '0074FF',
+              '0DFFEA', '8CFF41', 'FFDD00',
+              'FF3700', 'C30000', '790000'];
+var vis = {min:-3, max:40, palette: colors};
+
+Map.addLayer(r, vis, 'Interpolated',false);
+
+Map.addLayer(samples, {}, 'Samples', false);
+
+
+Export.image.toAsset(
+  // image, description, assetId, pyramidingPolicy, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, priority)
+  {image: r,
+   description: 'mort_krig',
+   assetId:"krig_max_mortRangeMax",
+   region:az.geometry(100),
+   scale:500
+  }
+  )

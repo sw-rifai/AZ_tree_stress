@@ -1,0 +1,128 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var dsa = ee.FeatureCollection("projects/ee-srifai/assets/AZ/surveyed_areas_epsg4326_allyears_conus_rgn3"),
+    gmd = ee.ImageCollection("GRIDMET/DROUGHT");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Author: Sami Rifai
+// Date: 2025-01-06
+// Revisions: ---
+// Description: Extract drought indices from regions overlapping with 
+//  USSA Forest Damage survey regions. Exports a multiband raster where each band corresponds to 
+//  a different yyyy-mm date. A corresponding table of the dates is also exported.
+//  
+
+// GridmetDrought Indices:
+// https://developers.google.com/earth-engine/datasets/catalog/GRIDMET_DROUGHT
+
+
+//**************************************************************************************************
+//*** Options for monthly aggegation ***
+//**************************************************************************************************
+// var state_usa = "Arizona" // not in use
+var start_date=ee.Date("2000-06-01") // CHANGE - check product start date
+// var end_date=ee.Date("2000-11-01") // CHANGE - check product end date
+var end_date=ee.Date("2023-11-01") // CHANGE - check product end date
+var start_year = start_date.get('year'); 
+var end_year = end_date.get('year');
+var months=ee.List.sequence(6,10,1); // Growing season months
+var years=ee.List.sequence(start_year,end_year);
+var ic = gmd; // CHANGE
+var product_name = "gridmetDrought" // CHANGE
+var sel_reducer = ee.Reducer.mean() // CHANGE
+var sel_var_name = "eddi5y" // spei30d, spei90d, spei1y,spei5y, pdsi, z, eddi90d, eddi1y, eddi5y
+var export_scale = 4638.3; // meters
+var export_crs = "EPSG:4326";
+
+var fnp = product_name+"_"+sel_var_name+"_"+start_date.format("Y-M").getInfo()+
+          "_"+end_date.format("Y-M").getInfo()
+print(fnp)
+
+// not in use //
+// var roi_poly = ee.FeatureCollection("TIGER/2016/States")
+//           .filter(ee.Filter.eq("NAME",state_usa))
+// var roi = roi_poly.geometry(100)
+
+
+
+//**************************************************************************************************
+// FUNCTIONS
+//**************************************************************************************************
+
+//******************************************************************
+// MAIN
+//******************************************************************
+
+// Construct ROI mask from total survey areas
+var roi_mask = ee.Image().byte().paint({featureCollection:dsa}).add(1).unmask().clip(dsa.bounds());
+
+
+// Construct date list
+var years = ee.List.sequence(start_year,end_year,1); 
+var months = [6,7,8,9,10]; //ee.List.sequence(1,12,1); 
+
+var dates = years.map(function(y){
+  return(months.map(function(m){
+    return(ee.Date.fromYMD(y,m,1))
+  }))
+})
+dates = dates.flatten().sort()
+print(dates)
+
+
+// map over dates
+var rstack = ee.ImageCollection.fromImages(
+  dates.map(function(d){
+    var d1 = ee.Date(d); 
+    var d2 = d1.advance(1,'month');
+    var sel_year = d1.get("year");
+    // var roi_survey = dsa.filter(ee.Filter.eq("srvy_yr",sel_year));
+    
+    var out = ic.filter(ee.Filter.date(d1,d2))
+            .mean()
+            .updateMask(roi_mask)
+            // .clip(roi_survey)
+            .select(sel_var_name)
+            .toFloat()
+            .set('system:time_start', d1.millis());
+    return(ee.Image(out))
+    }).flatten() // END YEARS SECTION
+        )
+
+var data_export = rstack.toBands(); // convert raster stack IC to multi band raster
+
+var dates_export = rstack.map(function(i){
+  var f = ee.Feature(null,{'date':i.date().format()})
+  return(f)
+});
+
+var dsa_extent = dsa.bounds();
+
+
+// Map.addLayer(rstack.select([sel_var_name]),
+//   null, sel_var_name,false)
+
+
+// Export raster stack ================================================================================
+Export.image.toDrive(
+  // image, description, folder, fileNamePrefix, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, fileDimensions, skipEmptyTiles, fileFormat, formatOptions
+  {image:data_export,
+  description:fnp,
+  folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+  fileNamePrefix:fnp,
+  region:dsa_extent,
+  crs:export_crs,
+  scale:export_scale,
+  maxPixels:501399299 
+  })
+
+// Extract corresponding dates from raster stack
+Export.table.toDrive(
+  // collection, description, folder, fileNamePrefix, fileFormat, selectors, maxVertices, priority)
+  {collection:dates_export,
+  description:fnp,
+  folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+  fileNamePrefix:fnp,
+  fileFormat:"CSV"
+  })
+
+
+

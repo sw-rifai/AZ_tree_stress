@@ -1,0 +1,173 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var prism = ee.ImageCollection("OREGONSTATE/PRISM/AN81m"),
+    dsa = ee.FeatureCollection("projects/ee-srifai/assets/AZ/surveyed_areas_epsg4326_allyears_conus_rgn3");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Author: Sami Rifai
+// Date: 2025-01-06
+// Revisions: ---
+// -- extract over all of Region 3, including AZ and NM
+// Description: Extract PRISM met data from regions overlapping with 
+//  FFA survey regions. Exports a multiband raster where each band corresponds to 
+//  a different yyyy-mm date. A corresponding table of the dates is also exported.
+
+ 
+
+//**************************************************************************************************
+//*** Options for monthly aggegation ***
+//**************************************************************************************************
+// var state_usa = "Arizona" // not in use 
+var start_date="2000-06-01" // CHANGE - check product start date
+var end_date="2023-11-01" // CHANGE - check product end date
+var start_year = ee.Date(start_date).get('year'); 
+var end_year = ee.Date(end_date).get('year');
+var months=ee.List.sequence(6,10,1); // Growing season months
+var years=ee.List.sequence(start_year,end_year);
+var ic = prism; // CHANGE
+var product_name = "PRISM_AN81m" // CHANGE
+var export_scale = 4638.3; // meters
+var export_crs = "EPSG:4326";
+
+
+// not in use //
+// var roi_poly = ee.FeatureCollection("TIGER/2016/States")
+//           .filter(ee.Filter.eq("NAME",state_usa))
+// var roi = roi_poly.geometry(100)
+
+
+
+// ee.ImageCollection("OREGONSTATE/PRISM/AN81m")
+
+
+//**************************************************************************************************
+//*** FUNCTIONS ***
+//**************************************************************************************************
+
+
+//**************************************************************************************************
+//*** MAIN ***
+//**************************************************************************************************
+var roi_mask = ee.Image().byte().paint({featureCollection:dsa}).add(1).unmask().clip(dsa.bounds());
+
+
+var met_vars = ee.List((prism.first().bandNames()))
+var met_var_count = met_vars.size().getInfo(); 
+
+// var export_scale = ic.first().select('ppt').projection().nominalScale().getInfo(); 
+// // print(export_scale)
+// var export_transform = prism.first().select('ppt').projection().transform().getInfo();
+// // print(export_transform); 
+
+// met_vars.map(function(mv){
+
+var dsa_extent = dsa.bounds();
+
+for (var i = 0; i < met_var_count; i++){
+// var i = 0;   
+
+  var out_var_names = met_vars.getString(i);
+  // print(out_var_names)
+  
+  var ss = ic.filter(ee.Filter.date(start_date, end_date))
+          .filter(ee.Filter.bounds(dsa_extent))
+          .map(function(i){
+            var out = i.updateMask(roi_mask)
+            return(out)
+          });
+
+
+  var export_stack = ss.select(ee.String(out_var_names))
+                      .toBands()
+                      .toFloat()
+                      // .clip(roi);
+
+
+  var dates_export = ss.map(function(i){
+    var f = ee.Feature(null,{'date':i.date().format()})
+    return(f)
+  });
+
+  //   // // extract the singular day of the acquisitions
+  //   // var export_dates = ss.map(function(i){
+  //   //   var f = ee.Feature(null,{'date':i.date().update(
+  //   //     {
+  //   //   "hour":0,
+  //   //   "minute":0,
+  //   //   "second":1
+  //   //   }).format()
+      
+  //   // });
+  //   // return(f);
+  //   // }).distinct("date");
+
+  // var out_var_names = out_var_names.getInfo(); 
+  // // var export_start_date = export_dates.first().getInfo();
+  // // var export_end_date = ss.sort("system:time_start",false).first().getInfo();
+  var export_start_date = start_date; 
+  var export_end_date = end_date;
+  var fnp = product_name + "_" + out_var_names.getInfo() + "_" + start_date + "_" + end_date; 
+  print(fnp)
+
+  // var fnp_dates  = "DATES_" + product_name + "_" + out_var_names + "_" + export_start_date + "_" + export_end_date;
+
+  Export.image.toDrive(
+      // image, description, folder, fileNamePrefix, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, fileDimensions, skipEmptyTiles, fileFormat, formatOptions)
+    {
+      image:export_stack,
+      description:fnp,
+      folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+      fileNamePrefix:fnp,
+      region:dsa_extent,
+      scale:export_scale,
+      crs:export_crs,
+      // crsTransform:export_transform,
+      fileFormat:"GeoTIFF"
+    })
+
+  Export.table.toDrive(//collection, description, folder, fileNamePrefix, fileFormat, selectors)
+  { collection:dates_export, 
+    description:fnp,
+    folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+    fileNamePrefix:fnp,
+    fileFormat:'csv'
+  })
+  
+}  
+// return(fnp)
+  
+// })
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//**************************************************************************************************
+//*** VISUALISATION ***
+//**************************************************************************************************
+
+
+
+//**************************************************************************************************
+//*** EXPORTS ***
+//**************************************************************************************************
+
+
+
+
+
+
+//**************************************************************************************************
+//*** ***
+//**************************************************************************************************

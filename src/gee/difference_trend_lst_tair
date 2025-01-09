@@ -1,0 +1,124 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var prism = ee.ImageCollection("OREGONSTATE/PRISM/AN81m"),
+    mod21c3 = ee.ImageCollection("MODIS/061/MOD21C3"),
+    myd21c3 = ee.ImageCollection("MODIS/061/MYD21C3"),
+    e5_t2m = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_BY_HOUR"),
+    e5 = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_AGGR"),
+    myd11a2 = ee.ImageCollection("MODIS/061/MYD11A2");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+//**************************************************************************************************
+//*** Options for monthly aggegation ***
+//**************************************************************************************************
+var year_start = 2002;
+var year_end = 2024;
+var month_start = 8; 
+var month_end = 8; 
+
+//**************************************************************************************************
+// FUNCTIONS
+//**************************************************************************************************
+var getQABits = function(image, start, end, newName) {
+    // Compute the bits we need to extract.
+    var pattern = 0;
+    for (var i = start; i <= end; i++) {
+       pattern += Math.pow(2, i);
+    }
+    var out = image.select([0], [newName])
+                  .bitwiseAnd(pattern)
+                  .rightShift(start);
+    return(image.addBands(out))
+};
+
+
+var mask_mod21c3 = function(i){
+  var qa01 = getQABits(i.select("QC_Day"),0,1,'good').select("good")
+                      .lte(1)
+                      .not();
+  var qa67 = getQABits(i.select("QC_Day"),6,7,'acc').select("acc")
+                      .gte(1)
+                      .not();
+  var out = i.updateMask(qa67); 
+  return(out)
+}
+
+var mask_myd11a2 = function(i){
+  var qa01 = getQABits(i.select("QC_Day"),0,1,'good').select("good")
+                      .lte(1)
+                      .not();
+                      
+  var qa67 = getQABits(i.select("QC_Day"),6,7,'acc').select("acc")
+                      .lte(1); 
+                      
+  var out = i.updateMask(qa67); 
+  return(out)
+}
+
+function createTimeBand(img) {
+  var year = img.date().difference(year_start, 'year');
+  var out = img.addBands(ee.Image(year).float())
+  return(out)
+}
+
+//******************************************************************
+// MAIN
+//******************************************************************
+
+var tmax = prism.filter(ee.Filter.calendarRange(month_start,month_end,'month'))
+                .filter(ee.Filter.calendarRange(year_start,year_end,'year'))
+                .select('tmax')
+                .map(createTimeBand)
+                
+var tmax_trend = tmax.select(['constant','tmax']).reduce(ee.Reducer.sensSlope())
+
+
+var e5_t2m_13h = e5_t2m.filter(ee.Filter.calendarRange(month_start, month_end,'month'))
+                .filter(ee.Filter.calendarRange(year_start, year_end,'year'))
+                .filter(ee.Filter.calendarRange(0,0,'hour'))
+                .select('temperature_2m')
+                .map(createTimeBand)
+                
+var e5_t2m_13h_trend = e5_t2m_13h.select(['constant','temperature_2m']).reduce(ee.Reducer.sensSlope())
+
+
+var e5_t2m_max = e5.filter(ee.Filter.calendarRange(month_start, month_end,'month'))
+                .filter(ee.Filter.calendarRange(year_start, year_end,'year'))
+                .select('temperature_2m_max')
+                .map(createTimeBand)
+                
+var e5_t2m_max_trend = e5_t2m_max.select(['constant','temperature_2m_max']).reduce(ee.Reducer.sensSlope())
+
+
+
+var lst_myd = myd11a2.filter(ee.Filter.calendarRange(month_start,month_end,'month'))
+                .filter(ee.Filter.calendarRange(year_start,year_end,'year'))
+                .map(mask_myd11a2)
+                .select('LST_Day_1km')
+                .map(function(i){
+                  var lst = i.select("LST_Day_1km").multiply(0.02).rename("lst")
+                  var out = i.addBands(lst);
+                  return(out)
+                })
+                .map(createTimeBand)
+                
+var lst_myd_trend = lst_myd.select(['constant','lst']).reduce(ee.Reducer.sensSlope())
+
+
+
+var d1 = lst_myd_trend.select("slope")
+                      .subtract(e5_t2m_max_trend.select("slope"))
+                      .rename("lst_m_t2max")
+
+
+//******************************************************************
+// VISUALS
+//******************************************************************
+
+var rdbu = ['#b2182b','#d6604d','#f4a582','#fddbc7','#f7f7f7','#d1e5f0','#92c5de','#4393c3','#2166ac'].reverse();
+var prgn = ['#762a83','#9970ab','#c2a5cf','#e7d4e8','#f7f7f7','#d9f0d3','#a6dba0','#5aae61','#1b7837'].reverse(); 
+
+Map.addLayer(tmax_trend,{palette:rdbu, bands:['slope'], min:-0.15,max:0.15}, "tmax_trend",false)
+// Map.addLayer(e5_t2m_13h_trend,{palette:rdbu, bands:['scale'], min:-0.1,max:0.1}, "e5_t2m_13h_trend",false)
+Map.addLayer(e5_t2m_max_trend,{palette:rdbu, bands:['slope'], min:-0.15,max:0.15}, "e5_t2m_max_trend",false)
+Map.addLayer(lst_myd_trend,{palette:rdbu, bands:['slope'], min:-0.15,max:0.15}, "lst_myd_trend",true)
+Map.addLayer(d1, {palette:prgn, bands:['lst_m_t2max'],min:-0.1,max:0.1}, "d1",false)

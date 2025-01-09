@@ -1,0 +1,225 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var dsa = ee.FeatureCollection("projects/ee-srifai/assets/AZ/surveyed_areas_epsg4326_allyears_conus_rgn3"),
+    mod13a2 = ee.ImageCollection("MODIS/061/MOD13A2"),
+    mod13q1 = ee.ImageCollection("MODIS/061/MOD13Q1"),
+    myd13q1 = ee.ImageCollection("MODIS/061/MYD13Q1"),
+    lsib = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017"),
+    mcd43a4 = ee.ImageCollection("MODIS/061/MCD43A4");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Author: Sami Rifai
+// Date: 2025-01-06
+// Revisions: ---
+// Description: Extract MODIS derived vegetation indices from regions overlapping with 
+//  FFA survey regions. Exports a multiband raster where each band corresponds to 
+//  a different yyyy-mm date. A corresponding table of the dates is also exported.
+//  
+
+
+
+//**************************************************************************************************
+//*** Options for monthly aggegation ***
+//**************************************************************************************************
+// var state_usa = "Arizona" // not in use
+var start_date=ee.Date("2000-06-01") // CHANGE - check product start date
+var end_date=ee.Date("2023-11-01") // CHANGE - check product end date
+var start_year = start_date.get('year'); 
+var end_year = end_date.get('year');
+var months=ee.List.sequence(6,10,1); // Growing season months
+var years=ee.List.sequence(start_year,end_year);
+var ic = mcd43a4; // CHANGE
+var product_name = "mcd43a4" // CHANGE
+var sel_reducer = ee.Reducer.mean() // CHANGE
+var sel_var_name = "evi2" // CHANGE
+var scale_factor = 0.0001; // CHANGE
+var export_scale = 500; // meters
+var export_crs = "EPSG:4326";
+var out_var_names = "evi2_monthly_surveyArea"; // CHANGE
+var fnp = product_name+"_"+out_var_names+"_"+start_date.format("Y-M").getInfo()+
+          "_"+end_date.format("Y-M").getInfo()
+print(fnp)
+
+// not in use //
+// var roi_poly = ee.FeatureCollection("TIGER/2016/States")
+//           .filter(ee.Filter.eq("NAME",state_usa))
+// var roi = roi_poly.geometry(100)
+
+
+
+
+
+
+//**************************************************************************************************
+// FUNCTIONS
+//**************************************************************************************************
+var getQABits = function(image, start, end, newName) {
+    // Compute the bits we need to extract.
+    var pattern = 0;
+    for (var i = start; i <= end; i++) {
+       pattern += Math.pow(2, i);
+    }
+    var out = image.select([0], [newName])
+                  .bitwiseAnd(pattern)
+                  .rightShift(start);
+    return(image.addBands(out))
+};
+
+function qa_mcd43(i){
+  // Mandatory
+
+  // red
+  var qa_red = getQABits(i.select("BRDF_Albedo_Band_Mandatory_Quality_Band1"), 0,1,"qa_b1")
+                         .select("qa_b1").eq(0);
+
+  // nir
+  var qa_nir = getQABits(i.select("BRDF_Albedo_Band_Mandatory_Quality_Band2"), 0,1,"qa_b2")
+                         .select("qa_b2").eq(0);
+
+
+  // // BRDF qa score
+
+  // // red
+  // var qa_score_red = getQABits(i.select("BRDF_Albedo_Band_Quality_Band1"), 0,2,"qa_red")
+  //                       .select("qa_red").lte(2);
+  // // nir
+  // var qa_score_nir = getQABits(i.select("BRDF_Albedo_Band_Quality_Band2"), 0,2,"qa_nir")
+  //                       .select("qa_nir").lte(2);
+
+  var i_out = i.unmask()
+              .updateMask(qa_red) // red
+              .updateMask(qa_nir) // nir
+              // .updateMask(qa_score_red) // red
+              // .updateMask(qa_score_nir) // nir
+  return(i_out); 
+}
+
+
+function qualityFlag_mod13a2(image) {
+  var vi_good = getQABits(image.select('DetailedQA'),0,1,'good')
+                .select("good")
+                .eq(0);
+  var out = image.updateMask(vi_good)
+
+  // Return the masked data.
+  return(out); 
+}
+
+function calcOtherVIs(i){
+    var i1 = i.select(['Nadir.*']).multiply(0.0001)
+               .rename(["red","nir","blue","green","mir", "swir1","swir2"])
+    
+    var ndvi = i1.normalizedDifference(['nir','red']).rename("ndvi")           
+    var nirv = i1.normalizedDifference(['nir','red']).multiply(i1.select('nir')).rename('nirv')
+    var kndvi = ee.Image(i1.normalizedDifference(['nir','red']).pow(2)).tanh().rename('kndvi')
+    
+    var evi2 = i1.expression(
+    '2.5 * ((NIR - RED) / (NIR + 2.4 * RED + 1))', {
+      'NIR': i1.select('nir'),
+      'RED': i1.select('red')})
+      .rename("evi2")
+      
+    var out = i1
+              // .addBands(ndvi).addBands(nirv).addBands(kndvi)
+              .addBands(evi2)
+            .set('system:time_start', i.date().millis());
+    return(out); 
+}
+
+
+
+function createTimeBand(img) {
+  // Add constant band of the corresponding year of the date
+  var year = img.date().difference(ee.Date(start_date), 'year');
+  var out = img.addBands(ee.Image(year).float())
+  return(out)
+}
+
+
+//******************************************************************
+// MAIN
+//******************************************************************
+
+// Construct ROI mask from total survey areas
+var roi_mask = ee.Image().byte().paint({featureCollection:dsa}).add(1).unmask().clip(dsa.bounds());
+
+
+// Construct date list
+var years = ee.List.sequence(start_year,end_year,1); 
+var months = [6,7,8,9,10]; //ee.List.sequence(1,12,1); 
+
+var dates = years.map(function(y){
+  return(months.map(function(m){
+    return(ee.Date.fromYMD(y,m,1))
+  }))
+})
+dates = dates.flatten().sort()
+print(dates)
+
+
+// map over dates
+var rstack = ee.ImageCollection.fromImages(
+  dates.map(function(d){
+    var d1 = ee.Date(d); 
+    var d2 = d1.advance(1,'month');
+    var sel_year = d1.get("year");
+    var roi_survey = dsa.filter(ee.Filter.eq("srvy_yr",sel_year));
+    
+    var out = ic.filter(ee.Filter.date(d1,d2))
+            .map(function(i){
+              return(i.updateMask(roi_mask))
+            })
+            .map(qa_mcd43)
+            .map(calcOtherVIs)
+            .mean()
+            // .map(function(i){
+            //     return(i.select(['constant','vi']))
+            //   })
+            // .reduce(sel_reducer)
+            // .rename(['constant','vi'])
+            // .clip(roi_survey)
+            .select(sel_var_name)
+            .toFloat()
+            .set('system:time_start', d1.millis());
+    return(ee.Image(out))
+    }).flatten() // END YEARS SECTION
+        )
+
+var data_export = rstack.toBands(); // convert raster stack IC to multi band raster
+
+var dates_export = rstack.map(function(i){
+  var f = ee.Feature(null,{'date':i.date().format()})
+  return(f)
+});
+
+var dsa_extent = dsa.bounds();
+
+
+Map.addLayer(rstack.select(['evi2']),
+null,
+'evi2',false)
+
+
+// Export VI raster stack ================================================================================
+Export.image.toDrive(
+  // image, description, folder, fileNamePrefix, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, fileDimensions, skipEmptyTiles, fileFormat, formatOptions
+  {image:data_export,
+  description:fnp,
+  folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+  fileNamePrefix:fnp,
+  region:dsa_extent,
+  crs:export_crs,
+  scale:export_scale,
+  maxPixels:501399299 
+  })
+
+// Extract corresponding dates from raster stack
+Export.table.toDrive(
+  // collection, description, folder, fileNamePrefix, fileFormat, selectors, maxVertices, priority)
+  {collection:dates_export,
+  description:fnp,
+  folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+  fileNamePrefix:fnp,
+  fileFormat:"CSV"
+  })
+
+
+

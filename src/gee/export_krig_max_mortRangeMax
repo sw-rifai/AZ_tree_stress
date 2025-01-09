@@ -1,0 +1,20 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var image = ee.Image("projects/ee-srifai/assets/AZ/krig_mort_col_range_max"),
+    image2 = ee.Image("projects/ee-srifai/assets/AZ/krig_max_mortRangeMax");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Map.addLayer(image2, {min:0,max:10},'krg_max_MortRangeMax')
+
+
+Export.image.toDrive(
+      // image, description, folder, fileNamePrefix, dimensions, region, scale, crs, crsTransform, maxPixels, shardSize, fileDimensions, skipEmptyTiles, fileFormat, formatOptions)
+    {
+      image:ee.Image("projects/ee-srifai/assets/AZ/krig_max_mortRangeMax"),
+      description:"krig_max_mortRangeMax",
+      folder:"gee_data_AZ_tree_stress", // specify a folder in google drive
+      fileNamePrefix:"krig_max_mortRangeMax",
+      // region:roi,
+      scale:500,
+      crs:"EPSG:4326",
+      // crsTransform:export_transform,
+      fileFormat:"GeoTIFF"
+    })
